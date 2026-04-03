@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Villa</title>
+  <script src="script/aframe.min.js"></script>
+  <style>
+    html, body { margin: 0; padding: 0; overflow: hidden; background: #000; }
+  </style>
+</head>
+<body>
+
+<script>
+/* ═══════════════════════════════════════════════════
+   Animated pool water – shape-fitted with rounded
+   corners to match the actual pool geometry.
+
+   World coords (model at position="-20 0.2 17"):
+     Pool outer mesh:  10.046 wide x 7.483 deep
+     World center:     X=-6.622  Y=0.227  Z=22.849
+   We use a THREE.Shape with chamfered corners so the
+   water surface stays inside the pool coping walls.
+═══════════════════════════════════════════════════ */
+AFRAME.registerComponent('pool-water', {
+  schema: {
+    amp:   { default: 0.06  },
+    speed: { default: 2.0   }
+  },
+
+  init () {
+    // Inner water area: outer 10.05×7.48 minus ~0.9m walls each long side,
+    // ~0.75m each short side, with rounded corner radius of 0.7m
+    const W  = 9.62;   // inner width  (X)
+    const D  = 5.90;   // inner depth  (Z)
+    const R  = 0.70;   // corner radius
+    const hw = W / 2, hd = D / 2;
+
+    const shape = new THREE.Shape();
+    // Rounded rectangle path (clockwise from top-left)
+    shape.moveTo(-hw + R,  hd);
+    shape.lineTo( hw - R,  hd);
+    shape.quadraticCurveTo( hw,  hd,  hw,  hd - R);
+    shape.lineTo( hw, -hd + R);
+    shape.quadraticCurveTo( hw, -hd,  hw - R, -hd);
+    shape.lineTo(-hw + R, -hd);
+    shape.quadraticCurveTo(-hw, -hd, -hw, -hd + R);
+    shape.lineTo(-hw,  hd - R);
+    shape.quadraticCurveTo(-hw,  hd, -hw + R,  hd);
+
+    // Subdivide for wave animation
+    const geo = new THREE.ShapeGeometry(shape, 40);
+    geo.rotateX(-Math.PI / 2);   // lay flat (XY -> XZ)
+
+    const n   = geo.attributes.position.count;
+    this._ox  = new Float32Array(n);
+    this._oy  = new Float32Array(n);
+    this._oz  = new Float32Array(n);
+    const pos = geo.attributes.position;
+    for (let i = 0; i < n; i++) {
+      this._ox[i] = pos.getX(i);
+      this._oy[i] = pos.getY(i);
+      this._oz[i] = pos.getZ(i);
+    }
+
+    this._mat = new THREE.MeshPhongMaterial({
+      color:       new THREE.Color('#18c0dc'),
+      emissive:    new THREE.Color('#022f40'),
+      specular:    new THREE.Color('#c0f8ff'),
+      shininess:   200,
+      transparent: true,
+      opacity:     0.82,
+      side:        THREE.DoubleSide
+    });
+
+    this._geo  = geo;
+    this._mesh = new THREE.Mesh(geo, this._mat);
+    this.el.setObject3D('pool-water', this._mesh);
+  },
+
+  tick (t) {
+    const pos  = this._geo.attributes.position;
+    const amp  = this.data.amp;
+    const time = t * 0.001 * this.data.speed;
+    for (let i = 0; i < pos.count; i++) {
+      const x = this._ox[i], z = this._oz[i];
+      pos.setY(i,
+        this._oy[i]
+        + Math.sin(x * 1.6 + time * 2.6) * amp
+        + Math.cos(z * 1.3 + time * 2.0) * amp * 0.65
+        + Math.sin((x - z) * 0.9 + time * 3.4) * amp * 0.28
+      );
+    }
+    pos.needsUpdate = true;
+    this._geo.computeVertexNormals();
+    // subtle hue shimmer
+    const h = 0.535 + Math.sin(time * 0.28) * 0.020;
+    this._mat.color.setHSL(h, 0.80, 0.47);
+    this._mat.emissive.setHSL(h, 0.72, 0.08);
+  },
+
+  remove () { this.el.removeObject3D('pool-water'); }
+});
+
+/* ═══════════════════════════════════════════════════
+   Sun sprite – canvas-drawn radial glow billboard
+═══════════════════════════════════════════════════ */
+AFRAME.registerComponent('sun-sprite', {
+  init () {
+    const c   = document.createElement('canvas');
+    c.width = c.height = 256;
+    const ctx = c.getContext('2d');
+
+    const g = ctx.createRadialGradient(128,128,0, 128,128,128);
+    g.addColorStop(0.00, 'rgba(255,255,245,1.00)');
+    g.addColorStop(0.10, 'rgba(255,248,195,1.00)');
+    g.addColorStop(0.28, 'rgba(255,215,70,0.88)');
+    g.addColorStop(0.55, 'rgba(255,160,20,0.45)');
+    g.addColorStop(0.80, 'rgba(255,110,0,0.12)');
+    g.addColorStop(1.00, 'rgba(255,90,0,0.00)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,256,256);
+
+    const mat = new THREE.SpriteMaterial({
+      map:      new THREE.CanvasTexture(c),
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true
+    });
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(20, 20, 1);
+    this.el.setObject3D('sun', sprite);
+  },
+  remove () { this.el.removeObject3D('sun'); }
+});
+</script>
+
+<!-- ═══════════════════════════════
+     Scene
+═══════════════════════════════ -->
+<a-scene
+  renderer="antialias:true; colorManagement:true; physicallyCorrectLights:true"
+  shadow="type:pcfsoft"
+  fog="type:linear; color:#c8dff0; near:130; far:480">
+
+  <a-assets timeout="30000">
+    <img      id="floor" src="villa/textures/brick_pavement_03_diff_2k.jpg">
+    <img      id="sky"   src="villa/textures/Sky Background-56.jpg">
+    <a-asset-item id="villa" src="villa/scene.gltf"></a-asset-item>
+  </a-assets>
+
+  <!-- Sky -->
+  <a-sky src="#sky" rotation="0 -20 0"></a-sky>
+
+  <!-- ── Sun sprite ──
+       High in sky to the upper-left, consistent with shadow direction -->
+  <a-entity sun-sprite position="-80 60 -200"></a-entity>
+
+  <!-- ── Directional sun (matches sprite) ── -->
+  <a-entity
+    light="type:directional;
+           color:#fff5d8;
+           intensity:1.55;
+           castShadow:true;
+           shadowMapWidth:2048; shadowMapHeight:2048;
+           shadowCameraLeft:-60; shadowCameraRight:60;
+           shadowCameraTop:60; shadowCameraBottom:-60;
+           shadowBias:-0.0005"
+    position="-80 60 -200">
+  </a-entity>
+
+  <!-- Ambient sky fill -->
+  <a-entity light="type:ambient; color:#d8eaff; intensity:0.48"></a-entity>
+
+  <!-- Hemisphere warm/cool -->
+  <a-entity light="type:hemisphere; color:#ffe4b8; groundColor:#3d5c3a; intensity:0.38"></a-entity>
+
+  <!-- ── Ground plane ── -->
+  <a-plane
+    src="#floor"
+    repeat="80 80"
+    rotation="-90 0 0"
+    scale="1000 1000 1"
+    shadow="receive:true"
+    material="roughness:0.85; metalness:0.03; color:#c0b89a">
+  </a-plane>
+
+  <!-- ══════════════════════════════════════════
+       Villa model
+
+       The GLTF root node has a matrix that applies
+       a 90° rotation around X (swaps Y↔Z axes).
+       After that root transform the model's lowest
+       geometry sits at world Y = -1.7896.
+       Lifting by +1.79 puts the base flush on Y=0.
+
+       A-Frame rotation="0 -180 0" is applied on top
+       (already accounted for in coordinate math).
+  ══════════════════════════════════════════ -->
+  <a-entity
+    gltf-model="#villa"
+    position="-20 0.2 17"
+    rotation="0 -180 0"
+    shadow="cast:true; receive:true">
+  </a-entity>
+
+  <!-- ══════════════════════════════════════════
+       Animated pool water surface
+
+       Derived from pool mesh accessor bounds
+       (piscine_001___piscine_001eau3sg):
+         local center  X=-13.378  Y=5.849  Z=0.011
+       After root matrix (90°X rot): Y↔Z swapped
+         → X=-13.378  Y=0.011  Z=-5.849
+       After A-Frame Ry(-180°): X,Z negated
+         → X=13.378   Y=0.011  Z=5.849
+       After model translation (1, 1.79, 1):
+         → X=14.378   Y=1.801  Z=6.849
+
+       Pool water plane: width=10.05, depth=7.48
+       (world X and Z after axis swap)
+  ══════════════════════════════════════════ -->
+  <!-- Pool water: inner 8.30x5.90 rounded-corner shape
+       World center X=-6.622 Y=0.230 Z=22.849 -->
+  <a-entity
+    pool-water
+    position="-6.622 0.230 22.849">
+  </a-entity>
+
+  <!-- Pool glow light -->
+  <a-entity
+    light="type:point; color:#00d8ff; intensity:2.0; distance:14; decay:2"
+    position="-6.622 1.8 22.849">
+  </a-entity>
+
+  <!-- ── Camera rig ── -->
+  <a-entity id="rig" position="0 2.5 65">
+    <a-camera
+      look-controls="pointerLockEnabled:false"
+      wasd-controls="acceleration:22"
+      fov="68">
+    </a-camera>
+  </a-entity>
+
+</a-scene>
+</body>
+</html>
